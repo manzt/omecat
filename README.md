@@ -1,0 +1,3 @@
+# omecat
+
+Don't use this code. Some utils for parsing/combining OME-XML metadata...
