@@ -1,11 +1,12 @@
-use serde::{Deserialize, Serialize};
+use clap::{Parser, Subcommand};
 use quick_xml::de::from_str;
 use quick_xml::se::to_string;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct OME {
     #[serde(rename = "Image", default)]
-    images: Vec<Image>
+    images: Vec<Image>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -44,9 +45,9 @@ struct Pixels {
     physical_size_z_unit: Option<String>,
     #[serde(rename = "@DimensionOrder")]
     dimension_order: String,
-    #[serde(rename="Channel", default)]
+    #[serde(rename = "Channel", default)]
     channels: Vec<Channel>,
-    #[serde(rename="TiffData", default)]
+    #[serde(rename = "TiffData", default)]
     tiff_data: Vec<TiffData>,
 }
 
@@ -58,7 +59,7 @@ struct Channel {
     samples_per_pixel: usize,
     #[serde(rename = "@Name")]
     name: String,
-    #[serde(rename="LightPath")]
+    #[serde(rename = "LightPath")]
     light_path: LightPath,
 }
 
@@ -77,7 +78,7 @@ struct TiffData {
     first_z: Option<usize>,
     #[serde(rename = "@FirstT")]
     first_t: Option<usize>,
-    #[serde(rename="UUID")]
+    #[serde(rename = "UUID")]
     uuid: Option<Uuid>,
 }
 
@@ -96,7 +97,13 @@ struct Selection {
 fn get_ome_ifd_index(sel: Selection, pixels: &Pixels) -> usize {
     // TODO: handle multiple diff data
     let image_offset = 0;
-    let Pixels { size_t, size_c, size_z, dimension_order, .. } = pixels;
+    let Pixels {
+        size_t,
+        size_c,
+        size_z,
+        dimension_order,
+        ..
+    } = pixels;
     let Selection { t, z, c } = sel;
     match dimension_order.as_str() {
         "XYZCT" => image_offset + t * size_z * size_c + c * size_z + z,
@@ -113,17 +120,31 @@ struct StackConfig {
     size_z: usize,
     physical_size_z: f64,
     physical_size_z_unit: String,
+    filename_template: String,
+}
+
+impl StackConfig {
+    fn filename(&self, z: usize) -> String {
+        match self.size_z {
+            1..=9 => self.filename_template.replace("{z}", &format!("{:01}", z)),
+            10..=99 => self.filename_template.replace("{z}", &format!("{:02}", z)),
+            100..=999 => self.filename_template.replace("{z}", &format!("{:03}", z)),
+            _ => panic!("Invalid size_z"),
+        }
+    }
 }
 
 fn to_multifile_companion_ome(xml_str: &str, config: &StackConfig) -> anyhow::Result<OME> {
     let mut src: OME = from_str(xml_str)?;
     let image = src.images.first_mut().unwrap();
-    // Clear out the existing TiffData
+
     image.pixels.physical_size_z = Some(config.physical_size_z);
     image.pixels.physical_size_z_unit = Some(config.physical_size_z_unit.clone());
-    image.pixels.tiff_data.clear();
 
+    // Clear out the existing TiffData
+    image.pixels.tiff_data.clear();
     assert_eq!(image.pixels.size_t, 1);
+
     for z in 0..config.size_z {
         for (c, _) in image.pixels.channels.iter().enumerate() {
             let ifd = get_ome_ifd_index(Selection { t: 0, z, c }, &image.pixels);
@@ -134,38 +155,86 @@ fn to_multifile_companion_ome(xml_str: &str, config: &StackConfig) -> anyhow::Re
                 first_z: Some(z),
                 first_t: Some(0),
                 uuid: Some(Uuid {
-                    file_name: format!("{}.ome.tif", z),
+                    file_name: config.filename(z),
                 }),
             };
             image.pixels.tiff_data.push(tiff_data);
         }
     }
+
     Ok(src)
 }
 
-fn main() -> anyhow::Result<()> {
-    if let Some(fp) = std::env::args().nth(1) {
-        let reader = std::fs::File::open(fp).map(std::io::BufReader::new)?;
-        let mut decoder = tiff::decoder::Decoder::new(reader)?;
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+#[command(propagate_version = true)]
+struct Cli {
+    #[arg(required = false)]
+    file: Option<String>,
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
 
-        if let Some(tiff::decoder::ifd::Value::Ascii(s)) =
-            decoder.find_tag(tiff::tags::Tag::ImageDescription)?
-        {
-            let doc: xmlem::Document = s.parse()?;
-            let s = doc.to_string_pretty();
-            println!("{}", &s);
-            let ome = to_multifile_companion_ome(&s, &StackConfig {
-                size_z: 10,
-                physical_size_z: 1.0,
-                physical_size_z_unit: "µm".to_string(),
-            })?;
-            let s = to_string(&ome)?;
-            let doc: xmlem::Document = s.parse()?;
-            let s = doc.to_string_pretty();
-            println!("{}", &s);
-        }
+#[derive(Subcommand)]
+enum Commands {
+    /// Adds files to myapp
+    Concat {
+        // Positional arguments specific to the Concat subcommand
+        #[arg(required = true)]
+        file: String,
+        #[arg(long)]
+        filename_template: String,
+        #[arg(long)]
+        size_z: usize,
+        #[arg(long, default_value_t = 1.0)]
+        physical_size_z: f64,
+        #[arg(long, default_value = "µm")]
+        physical_size_z_unit: String,
+    },
+}
+
+fn get_image_description(file: &str) -> anyhow::Result<String> {
+    let reader = std::fs::File::open(file).map(std::io::BufReader::new)?;
+    let mut decoder = tiff::decoder::Decoder::new(reader)?;
+    if let Some(tiff::decoder::ifd::Value::Ascii(s)) =
+        decoder.find_tag(tiff::tags::Tag::ImageDescription)?
+    {
+        Ok(s)
     } else {
-        println!("Usage: omecat <filename>");
+        Err(anyhow::anyhow!("No ImageDescription tag found"))
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match &cli.command {
+        Some(Commands::Concat {
+            file,
+            size_z,
+            physical_size_z,
+            physical_size_z_unit,
+            filename_template,
+        }) => {
+            let xml_str = get_image_description(file)?;
+            let ome = to_multifile_companion_ome(
+                &xml_str,
+                &StackConfig {
+                    size_z: *size_z,
+                    physical_size_z: *physical_size_z,
+                    physical_size_z_unit: physical_size_z_unit.to_string(),
+                    filename_template: filename_template.to_string(),
+                },
+            )?;
+            let doc: xmlem::Document = to_string(&ome)?.parse()?;
+            println!("{}", &doc.to_string_pretty());
+        }
+        None => {
+            if let Some(file) = &cli.file {
+                let xml_str = get_image_description(file)?;
+                let doc: xmlem::Document = xml_str.parse()?;
+                println!("{}", &doc.to_string_pretty());
+            }
+        }
     }
     Ok(())
 }
