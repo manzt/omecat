@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use quick_xml::de::from_str;
 use quick_xml::se::to_string;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct OME {
@@ -207,6 +208,9 @@ fn get_image_description(file: &str) -> anyhow::Result<String> {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+
     match &cli.command {
         Some(Commands::Concat {
             file,
@@ -226,13 +230,13 @@ fn main() -> anyhow::Result<()> {
                 },
             )?;
             let doc: xmlem::Document = to_string(&ome)?.parse()?;
-            println!("{}", &doc.to_string_pretty());
+            handle.write_all(doc.to_string_pretty().as_bytes())?;
         }
         None => {
             if let Some(file) = &cli.file {
                 let xml_str = get_image_description(file)?;
                 let doc: xmlem::Document = xml_str.parse()?;
-                println!("{}", &doc.to_string_pretty());
+                handle.write_all(doc.to_string_pretty().as_bytes())?;
             }
         }
     }
