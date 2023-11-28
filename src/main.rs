@@ -95,24 +95,16 @@ struct Selection {
     c: usize,
 }
 
-fn get_ome_ifd_index(sel: Selection, pixels: &Pixels) -> usize {
-    // TODO: handle multiple diff data
-    let image_offset = 0;
-    let Pixels {
-        size_t,
-        size_c,
-        size_z,
-        dimension_order,
-        ..
-    } = pixels;
-    let Selection { t, z, c } = sel;
-    match dimension_order.as_str() {
-        "XYZCT" => image_offset + t * size_z * size_c + c * size_z + z,
-        "XYZTC" => image_offset + c * size_z * size_t + t * size_z + z,
-        "XYCTZ" => image_offset + z * size_c * size_t + t * size_c + c,
-        "XYCZT" => image_offset + t * size_c * size_z + z * size_c + c,
-        "XYTCZ" => image_offset + z * size_t * size_c + c * size_t + t,
-        "XYTZC" => image_offset + c * size_t * size_z + z * size_t + t,
+fn get_relative_ifd_index(selection: Selection, pixels: &Pixels) -> usize {
+    let Pixels { size_t, size_c, size_z, .. } = pixels;
+    let Selection { t, z, c } = selection;
+    match pixels.dimension_order.as_str() {
+        "XYZCT" => t * size_z * size_c + c * size_z + z,
+        "XYZTC" => c * size_z * size_t + t * size_z + z,
+        "XYCTZ" => z * size_c * size_t + t * size_c + c,
+        "XYCZT" => t * size_c * size_z + z * size_c + c,
+        "XYTCZ" => z * size_t * size_c + c * size_t + t,
+        "XYTZC" => c * size_t * size_z + z * size_t + t,
         _ => panic!("Invalid dimension order"),
     }
 }
@@ -125,6 +117,13 @@ struct StackConfig {
 }
 
 impl StackConfig {
+    /// Returns the filename for the given z index
+    /// The z index is 0-based
+    /// The filename is 1-based
+    /// The filename is zero-padded to the number of digits in size_z
+    /// e.g. size_z = 10, z = 0, filename = 01
+    /// e.g. size_z = 100, z = 0, filename = 001
+    /// e.g. size_z = 100, z = 99, filename = 100
     fn filename(&self, z: usize) -> String {
         match self.size_z {
             1..=9 => self.filename_template.replace("{z}", &format!("{:01}", z)),
@@ -148,7 +147,7 @@ fn to_multifile_companion_ome(xml_str: &str, config: &StackConfig) -> anyhow::Re
 
     for z in 0..config.size_z {
         for (c, _) in image.pixels.channels.iter().enumerate() {
-            let ifd = get_ome_ifd_index(Selection { t: 0, z, c }, &image.pixels);
+            let ifd = get_relative_ifd_index(Selection { t: 0, z, c }, &image.pixels);
             let tiff_data = TiffData {
                 ifd: Some(ifd),
                 plane_count: Some(1),
