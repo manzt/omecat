@@ -22,6 +22,10 @@ struct Image {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Pixels {
+    #[serde(rename = "@ID")]
+    id: String,
+    #[serde(rename = "@Type")]
+    r#type: String,
     #[serde(rename = "@SizeX")]
     size_x: usize,
     #[serde(rename = "@SizeY")]
@@ -99,12 +103,12 @@ fn get_relative_ifd_index(selection: Selection, pixels: &Pixels) -> usize {
     let Pixels { size_t, size_c, size_z, .. } = pixels;
     let Selection { t, z, c } = selection;
     match pixels.dimension_order.as_str() {
-        "XYZCT" => t * size_z * size_c + c * size_z + z,
-        "XYZTC" => c * size_z * size_t + t * size_z + z,
-        "XYCTZ" => z * size_c * size_t + t * size_c + c,
-        "XYCZT" => t * size_c * size_z + z * size_c + c,
-        "XYTCZ" => z * size_t * size_c + c * size_t + t,
-        "XYTZC" => c * size_t * size_z + z * size_t + t,
+        "XYZCT" => z + (size_z * c) + (size_z * size_c * t),
+        "XYZTC" => z + (size_z * t) + (size_z * size_t * c),
+        "XYCTZ" => c + (size_c * t) + (size_c * size_t * z),
+        "XYCZT" => c + (size_c * z) + (size_c * size_z * t),
+        "XYTCZ" => t + (size_t * c) + (size_t * size_c * z),
+        "XYTZC" => t + (size_t * z) + (size_t * size_z * c),
         _ => panic!("Invalid dimension order"),
     }
 }
@@ -126,9 +130,9 @@ impl StackConfig {
     /// e.g. size_z = 100, z = 99, filename = 100
     fn filename(&self, z: usize) -> String {
         match self.size_z {
-            1..=9 => self.filename_template.replace("{z}", &format!("{:01}", z)),
-            10..=99 => self.filename_template.replace("{z}", &format!("{:02}", z)),
-            100..=999 => self.filename_template.replace("{z}", &format!("{:03}", z)),
+            1..=9 => self.filename_template.replace("{z}", &format!("{:02}", z + 1)),
+            10..=99 => self.filename_template.replace("{z}", &format!("{:02}", z + 1)),
+            100..=999 => self.filename_template.replace("{z}", &format!("{:03}", z + 1)),
             _ => panic!("Invalid size_z"),
         }
     }
@@ -147,7 +151,7 @@ fn to_multifile_companion_ome(xml_str: &str, config: &StackConfig) -> anyhow::Re
 
     for z in 0..config.size_z {
         for (c, _) in image.pixels.channels.iter().enumerate() {
-            let ifd = get_relative_ifd_index(Selection { t: 0, z, c }, &image.pixels);
+            let ifd = get_relative_ifd_index(Selection { t: 0, z: 0, c }, &image.pixels);
             let tiff_data = TiffData {
                 ifd: Some(ifd),
                 plane_count: Some(1),
@@ -162,6 +166,7 @@ fn to_multifile_companion_ome(xml_str: &str, config: &StackConfig) -> anyhow::Re
         }
     }
 
+    image.pixels.size_z = config.size_z;
     Ok(src)
 }
 
