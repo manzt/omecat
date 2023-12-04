@@ -100,7 +100,12 @@ struct Selection {
 }
 
 fn get_relative_ifd_index(selection: Selection, pixels: &Pixels) -> usize {
-    let Pixels { size_t, size_c, size_z, .. } = pixels;
+    let Pixels {
+        size_t,
+        size_c,
+        size_z,
+        ..
+    } = pixels;
     let Selection { t, z, c } = selection;
     match pixels.dimension_order.as_str() {
         "XYZCT" => z + (size_z * c) + (size_z * size_c * t),
@@ -130,9 +135,15 @@ impl StackConfig {
     /// e.g. size_z = 100, z = 99, filename = 100
     fn filename(&self, z: usize) -> String {
         match self.size_z {
-            1..=9 => self.filename_template.replace("{z}", &format!("{:02}", z + 1)),
-            10..=99 => self.filename_template.replace("{z}", &format!("{:02}", z + 1)),
-            100..=999 => self.filename_template.replace("{z}", &format!("{:03}", z + 1)),
+            1..=9 => self
+                .filename_template
+                .replace("{z}", &format!("{:01}", z + 1)),
+            10..=99 => self
+                .filename_template
+                .replace("{z}", &format!("{:02}", z + 1)),
+            100..=999 => self
+                .filename_template
+                .replace("{z}", &format!("{:03}", z + 1)),
             _ => panic!("Invalid size_z"),
         }
     }
